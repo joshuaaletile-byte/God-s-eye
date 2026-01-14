@@ -26,8 +26,8 @@ def run_web():
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# 🔴 PUT YOUR TELEGRAM USER ID HERE
-ADMIN_ID = 123456789  # <-- replace this
+# 🔴 Replace with your numeric Telegram ID
+ADMIN_ID = 123456789  # <-- Your Telegram numeric ID here
 
 # ===============================
 # 💾 PERSISTENT STORAGE
@@ -50,16 +50,22 @@ paired_chats = load_pairs()
 # 🔎 DATA SOURCES
 # ===============================
 def hackernews_data():
-    r = requests.get("https://hn.algolia.com/api/v1/search?tags=story", timeout=10)
-    if r.status_code != 200:
+    try:
+        r = requests.get("https://hn.algolia.com/api/v1/search?tags=story", timeout=10)
+        if r.status_code != 200:
+            return []
+        return [hit["title"] for hit in r.json()["hits"][:20]]
+    except:
         return []
-    return [hit["title"] for hit in r.json()["hits"][:20]]
 
 def devto_data():
-    r = requests.get("https://dev.to/api/articles", timeout=10)
-    if r.status_code != 200:
+    try:
+        r = requests.get("https://dev.to/api/articles", timeout=10)
+        if r.status_code != 200:
+            return []
+        return [a["title"] for a in r.json()[:20]]
+    except:
         return []
-    return [a["title"] for a in r.json()[:20]]
 
 # ===============================
 # 🧠 TEXT PROCESSING
@@ -94,22 +100,58 @@ def ai_style_answer(question, texts):
         f"around this subject in the public domain."
     )
 
+def ai_style_trending(texts):
+    if not texts:
+        return "There is currently no strong public trend detected."
+
+    words = []
+    stopwords = {
+        "the","and","with","from","this","that","about","into",
+        "have","will","they","their","what","when","where",
+        "your","been","more","over","after","before","such"
+    }
+
+    for text in texts:
+        cleaned = clean(text)
+        for w in cleaned.split():
+            if w not in stopwords and len(w) > 4:
+                words.append(w)
+
+    if not words:
+        return "Public discussions are currently too scattered to identify a clear trend."
+
+    common = Counter(words).most_common(6)
+    topics = ", ".join([w for w, _ in common])
+
+    return (
+        "Based on continuous public discussions across technology and news platforms, "
+        "current trending topics are centered around "
+        f"{topics}. These subjects are receiving consistent attention and engagement "
+        "from online communities, indicating ongoing relevance."
+    )
+
 # ===============================
 # 🤖 TELEGRAM HELPERS
 # ===============================
 def send_message(chat_id, text):
-    requests.post(
-        f"{TELEGRAM_API}/sendMessage",
-        json={"chat_id": chat_id, "text": text},
-        timeout=10
-    )
+    try:
+        requests.post(
+            f"{TELEGRAM_API}/sendMessage",
+            json={"chat_id": chat_id, "text": text},
+            timeout=10
+        )
+    except:
+        pass
 
 def get_updates(offset=None):
-    return requests.get(
-        f"{TELEGRAM_API}/getUpdates",
-        params={"timeout": 100, "offset": offset},
-        timeout=120
-    ).json()
+    try:
+        return requests.get(
+            f"{TELEGRAM_API}/getUpdates",
+            params={"timeout": 100, "offset": offset},
+            timeout=120
+        ).json()
+    except:
+        return {"result": []}
 
 # ===============================
 # 🚀 BOT LOOP
@@ -130,6 +172,7 @@ def run_bot():
             chat_id = msg["chat"]["id"]
             text = msg.get("text", "").strip()
 
+            # /start
             if text == "/start":
                 send_message(
                     chat_id,
@@ -144,35 +187,33 @@ def run_bot():
                 )
                 continue
 
+            # /pair
             if text == "/pair":
                 paired_chats.add(chat_id)
                 save_pairs(paired_chats)
                 send_message(chat_id, "✅ Chat paired successfully.")
                 continue
 
+            # /unpair
             if text == "/unpair":
                 paired_chats.discard(chat_id)
                 save_pairs(paired_chats)
                 send_message(chat_id, "❌ Chat unpaired.")
                 continue
 
+            # Require pairing
             if chat_id not in paired_chats:
                 send_message(chat_id, "⚠️ Please /pair this chat first.")
                 continue
 
+            # /trending
             if text == "/trending":
                 data = hackernews_data() + devto_data()
-                if not data:
-                    send_message(chat_id, "No trends found at the moment.")
-                    continue
-
-                words = Counter(" ".join(data).split()).most_common(6)
-                reply = "🔥 Current public trends:\n\n"
-                for w, c in words:
-                    reply += f"- {w}\n"
-                send_message(chat_id, reply)
+                answer = ai_style_trending(data)
+                send_message(chat_id, f"🔥 Trending Now:\n\n{answer}")
                 continue
 
+            # /requests
             if text.startswith("/requests"):
                 question = text.replace("/requests", "").strip()
                 if not question:
@@ -184,15 +225,17 @@ def run_bot():
                 send_message(chat_id, answer)
                 continue
 
+            # /complaints
             if text.startswith("/complaints"):
                 complaint = text.replace("/complaints", "").strip()
                 if not complaint:
                     send_message(chat_id, "Usage: /complaints <your message>")
                     continue
 
+                # Send to admin
                 send_message(
                     ADMIN_ID,
-                    f"📩 New complaint:\nFrom chat {chat_id}\n\n{complaint}"
+                    f"📩 New complaint from chat {chat_id}:\n\n{complaint}"
                 )
                 send_message(chat_id, "✅ Your complaint has been sent. Thank you.")
                 continue
@@ -200,7 +243,7 @@ def run_bot():
         time.sleep(1)
 
 # ===============================
-# ▶️ START
+# ▶️ START EVERYTHING
 # ===============================
 if __name__ == "__main__":
     Thread(target=run_web).start()
