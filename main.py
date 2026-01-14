@@ -2,12 +2,13 @@ import requests
 import os
 import time
 import re
+import json
 from collections import Counter
 from threading import Thread
 from flask import Flask
 
 # ===============================
-# 🌐 KEEP-ALIVE WEB SERVER (RENDER)
+# 🌐 KEEP-ALIVE WEB SERVER
 # ===============================
 app = Flask(__name__)
 
@@ -25,48 +26,76 @@ def run_web():
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# ===============================
-# 📌 PAIRING STORAGE (IN-MEMORY)
-# ===============================
-paired_chats = set()
+# 🔴 PUT YOUR TELEGRAM USER ID HERE
+ADMIN_ID = 123456789  # <-- replace this
 
 # ===============================
-# 🔎 PUBLIC DATA SOURCES
+# 💾 PERSISTENT STORAGE
 # ===============================
-def hackernews_trends(limit=15):
-    url = "https://hn.algolia.com/api/v1/search?tags=story"
-    r = requests.get(url, timeout=10)
+PAIR_FILE = "paired_chats.json"
+
+def load_pairs():
+    if not os.path.exists(PAIR_FILE):
+        return set()
+    with open(PAIR_FILE, "r") as f:
+        return set(json.load(f))
+
+def save_pairs(pairs):
+    with open(PAIR_FILE, "w") as f:
+        json.dump(list(pairs), f)
+
+paired_chats = load_pairs()
+
+# ===============================
+# 🔎 DATA SOURCES
+# ===============================
+def hackernews_data():
+    r = requests.get("https://hn.algolia.com/api/v1/search?tags=story", timeout=10)
     if r.status_code != 200:
         return []
-    return [hit["title"] for hit in r.json()["hits"][:limit]]
+    return [hit["title"] for hit in r.json()["hits"][:20]]
 
-def devto_trends(limit=15):
+def devto_data():
     r = requests.get("https://dev.to/api/articles", timeout=10)
     if r.status_code != 200:
         return []
-    return [a["title"] for a in r.json()[:limit]]
+    return [a["title"] for a in r.json()[:20]]
 
 # ===============================
-# 🧠 TEXT ANALYSIS
+# 🧠 TEXT PROCESSING
 # ===============================
-def clean_text(text):
+def clean(text):
     text = text.lower()
     return re.sub(r"[^a-z\s]", "", text)
 
-def extract_trends(texts):
-    stopwords = {
-        "the","and","with","from","this","that","about",
-        "your","into","when","what","where","have"
-    }
-    words = []
-    for text in texts:
-        for w in clean_text(text).split():
-            if w not in stopwords and len(w) > 3:
-                words.append(w)
-    return Counter(words).most_common(8)
+def ai_style_answer(question, texts):
+    keywords = clean(question).split()
+    relevant = []
+
+    for t in texts:
+        score = sum(1 for k in keywords if k in clean(t))
+        if score > 0:
+            relevant.append(t)
+
+    if not relevant:
+        return "Based on available public discussions, there is currently limited information addressing that topic directly."
+
+    summary_words = []
+    for text in relevant:
+        summary_words.extend(clean(text).split())
+
+    common = Counter(summary_words).most_common(12)
+    topic_words = ", ".join([w for w, _ in common])
+
+    return (
+        f"Based on recent public discussions across multiple platforms, "
+        f"the topic of '{question}' is being associated with key themes such as "
+        f"{topic_words}. These discussions suggest ongoing interest and activity "
+        f"around this subject in the public domain."
+    )
 
 # ===============================
-# 🤖 TELEGRAM FUNCTIONS
+# 🤖 TELEGRAM HELPERS
 # ===============================
 def send_message(chat_id, text):
     requests.post(
@@ -76,12 +105,14 @@ def send_message(chat_id, text):
     )
 
 def get_updates(offset=None):
-    params = {"timeout": 100, "offset": offset}
-    r = requests.get(f"{TELEGRAM_API}/getUpdates", params=params, timeout=120)
-    return r.json()
+    return requests.get(
+        f"{TELEGRAM_API}/getUpdates",
+        params={"timeout": 100, "offset": offset},
+        timeout=120
+    ).json()
 
 # ===============================
-# 🚀 BOT LOGIC
+# 🚀 BOT LOOP
 # ===============================
 def run_bot():
     offset = None
@@ -92,85 +123,84 @@ def run_bot():
 
         for update in updates.get("result", []):
             offset = update["update_id"] + 1
-            message = update.get("message")
-            if not message:
+            msg = update.get("message")
+            if not msg:
                 continue
 
-            chat_id = message["chat"]["id"]
-            text = message.get("text", "").strip()
+            chat_id = msg["chat"]["id"]
+            text = msg.get("text", "").strip()
 
-            # /start
             if text == "/start":
                 send_message(
                     chat_id,
-                    "👁️ *Welcome to God's Eye Bot*\n"
-                    "Created by *Ph03nix*\n\n"
-                    "I analyze *public internet trends* only.\n\n"
-                    "📌 Commands:\n"
-                    "/pair – Pair bot to this chat\n"
+                    "👁️ Welcome to God's Eye Bot\n"
+                    "Created by Ph03nix\n\n"
+                    "Commands:\n"
+                    "/pair – Pair this chat\n"
                     "/unpair – Remove pairing\n"
-                    "/trending – Show current trends\n"
-                    "/requests <question> – Ask the internet\n\n"
-                    "Examples:\n"
-                    "`/trending`\n"
-                    "`/requests football transfer news`"
+                    "/trending – Show public trends\n"
+                    "/requests <question> – Ask the internet\n"
+                    "/complaints <message> – Send feedback"
                 )
                 continue
 
-            # /pair
             if text == "/pair":
                 paired_chats.add(chat_id)
-                send_message(chat_id, "✅ This chat has been paired.")
+                save_pairs(paired_chats)
+                send_message(chat_id, "✅ Chat paired successfully.")
                 continue
 
-            # /unpair
             if text == "/unpair":
                 paired_chats.discard(chat_id)
-                send_message(chat_id, "❌ This chat has been unpaired.")
+                save_pairs(paired_chats)
+                send_message(chat_id, "❌ Chat unpaired.")
                 continue
 
-            # Block unpaired chats
             if chat_id not in paired_chats:
-                send_message(chat_id, "⚠️ This chat is not paired. Use /pair first.")
+                send_message(chat_id, "⚠️ Please /pair this chat first.")
                 continue
 
-            # /trending
             if text == "/trending":
-                posts = hackernews_trends() + devto_trends()
-                if not posts:
-                    send_message(chat_id, "No trends found right now.")
+                data = hackernews_data() + devto_data()
+                if not data:
+                    send_message(chat_id, "No trends found at the moment.")
                     continue
 
-                trends = extract_trends(posts)
-                reply = "🔥 *Current Internet Trends:*\n\n"
-                for word, count in trends:
-                    reply += f"- {word} ({count})\n"
-
+                words = Counter(" ".join(data).split()).most_common(6)
+                reply = "🔥 Current public trends:\n\n"
+                for w, c in words:
+                    reply += f"- {w}\n"
                 send_message(chat_id, reply)
                 continue
 
-            # /requests
             if text.startswith("/requests"):
-                query = text.replace("/requests", "").strip()
-                if not query:
-                    send_message(chat_id, "❓ Usage: /requests <your question>")
+                question = text.replace("/requests", "").strip()
+                if not question:
+                    send_message(chat_id, "Usage: /requests <your question>")
                     continue
 
-                posts = hackernews_trends() + devto_trends()
-                matched = [p for p in posts if query.lower() in p.lower()]
+                data = hackernews_data() + devto_data()
+                answer = ai_style_answer(question, data)
+                send_message(chat_id, answer)
+                continue
 
-                if not matched:
-                    send_message(chat_id, "No public answers found.")
-                else:
-                    reply = f"🌍 *Public answers for:* {query}\n\n"
-                    for m in matched[:5]:
-                        reply += f"- {m}\n"
-                    send_message(chat_id, reply)
+            if text.startswith("/complaints"):
+                complaint = text.replace("/complaints", "").strip()
+                if not complaint:
+                    send_message(chat_id, "Usage: /complaints <your message>")
+                    continue
+
+                send_message(
+                    ADMIN_ID,
+                    f"📩 New complaint:\nFrom chat {chat_id}\n\n{complaint}"
+                )
+                send_message(chat_id, "✅ Your complaint has been sent. Thank you.")
+                continue
 
         time.sleep(1)
 
 # ===============================
-# ▶️ START EVERYTHING
+# ▶️ START
 # ===============================
 if __name__ == "__main__":
     Thread(target=run_web).start()
