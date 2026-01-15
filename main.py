@@ -4,21 +4,24 @@ import json
 import os
 from collections import Counter
 from flask import Flask
+from threading import Thread
 from openai import OpenAI
 
-# ================= CONFIG =================
+# ===================== CONFIG =====================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ADMIN_ID = os.getenv("ADMIN_ID")
-ADMIN_ID = int(ADMIN_ID) if ADMIN_ID and ADMIN_ID.isdigit() else None
+
+# SAFE ADMIN ID HANDLING (FIXED)
+_admin_env = os.getenv("ADMIN_ID")
+ADMIN_ID = int(_admin_env) if _admin_env and _admin_env.isdigit() else None
 
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 PAIR_FILE = "paired.json"
 
-# ================= WEB SERVER (Render) =================
+# ===================== WEB SERVER =====================
 
 app = Flask(__name__)
 
@@ -26,7 +29,7 @@ app = Flask(__name__)
 def home():
     return "God's Eye Bot is running."
 
-# ================= UTILITIES =================
+# ===================== UTILITIES =====================
 
 def load_pairs():
     if not os.path.exists(PAIR_FILE):
@@ -40,20 +43,27 @@ def save_pairs(data):
 
 def send_message(chat_id, text):
     url = f"{BASE_URL}/sendMessage"
-    requests.post(url, json={
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown"
-    })
+    requests.post(
+        url,
+        json={
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "Markdown"
+        },
+        timeout=10
+    )
 
 def clean(text):
     return "".join(c.lower() for c in text if c.isalnum() or c.isspace())
 
-# ================= DATA SOURCES =================
+# ===================== DATA SOURCES =====================
 
 def hackernews_data():
     try:
-        res = requests.get("https://hacker-news.firebaseio.com/v0/topstories.json", timeout=10)
+        res = requests.get(
+            "https://hacker-news.firebaseio.com/v0/topstories.json",
+            timeout=10
+        )
         ids = res.json()[:5]
         titles = []
         for i in ids:
@@ -69,12 +79,15 @@ def hackernews_data():
 
 def devto_data():
     try:
-        res = requests.get("https://dev.to/api/articles?top=5", timeout=10)
+        res = requests.get(
+            "https://dev.to/api/articles?top=5",
+            timeout=10
+        )
         return [a["title"] for a in res.json()[:5]]
     except:
         return []
 
-# ================= AI FUNCTIONS =================
+# ===================== AI FUNCTIONS =====================
 
 def ai_style_trending(texts):
     if not texts:
@@ -92,6 +105,9 @@ def ai_style_trending(texts):
             if w not in stopwords and len(w) > 4:
                 words.append(w)
 
+    if not words:
+        return "Public discussions are currently too scattered to determine a clear trend."
+
     common = Counter(words).most_common(6)
     topics = ", ".join(w for w, _ in common)
 
@@ -106,8 +122,14 @@ def ai_answer(question, context):
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a helpful, intelligent assistant."},
-                {"role": "user", "content": f"Context: {context}\n\nQuestion: {question}"}
+                {
+                    "role": "system",
+                    "content": "You are an intelligent assistant that gives clear, human-like answers."
+                },
+                {
+                    "role": "user",
+                    "content": f"Context: {context}\n\nQuestion: {question}"
+                }
             ],
             max_tokens=300
         )
@@ -115,14 +137,14 @@ def ai_answer(question, context):
     except:
         return "⚠️ I couldn't process that request right now."
 
-# ================= ROBOT WELCOME =================
+# ===================== ROBOT WELCOME =====================
 
 def robot_welcome(chat_id):
     for dots in ["•", "• •", "• • •"]:
         send_message(chat_id, f"Initializing{dots}")
         time.sleep(0.7)
 
-    message = (
+    welcome = (
         "✅ Connection established.\n"
         "You are now **linked** to *God’s Eye Bot*.\n\n"
         "Created by **Ph03nix**, designed to monitor trends, "
@@ -136,9 +158,10 @@ def robot_welcome(chat_id):
         "/complaints – Send feedback to the developer\n\n"
         "⚡ Powered by **PH03NIX**"
     )
-    send_message(chat_id, message)
 
-# ================= BOT LOOP =================
+    send_message(chat_id, welcome)
+
+# ===================== BOT LOOP =====================
 
 def run_bot():
     offset = 0
@@ -158,7 +181,7 @@ def run_bot():
                     continue
 
                 chat_id = message["chat"]["id"]
-                text = message.get("text", "")
+                text = message.get("text", "").strip()
 
                 # START
                 if text == "/start":
@@ -185,10 +208,10 @@ def run_bot():
                 if text == "/trending":
                     data = hackernews_data() + devto_data()
                     answer = ai_style_trending(data)
-                    send_message(chat_id, f"🔥 **Trending Now**:\n\n{answer}")
+                    send_message(chat_id, f"🔥 **Trending Now**\n\n{answer}")
                     continue
 
-                # REQUESTS (AI)
+                # REQUESTS
                 if text.startswith("/requests"):
                     question = text.replace("/requests", "").strip()
                     if not question:
@@ -197,7 +220,7 @@ def run_bot():
 
                     context = " ".join((hackernews_data() + devto_data())[:5])
                     answer = ai_answer(question, context)
-                    send_message(chat_id, f"🤖 **Answer:**\n\n{answer}")
+                    send_message(chat_id, f"🤖 **Answer**\n\n{answer}")
                     continue
 
                 # COMPLAINTS
@@ -208,19 +231,19 @@ def run_bot():
                         continue
 
                     if ADMIN_ID:
-    send_message(
-        ADMIN_ID,
-        f"📩 **New Complaint**\nFrom chat `{chat_id}`:\n\n{complaint}"
-    )
+                        send_message(
+                            ADMIN_ID,
+                            f"📩 **New Complaint**\nFrom chat `{chat_id}`:\n\n{complaint}"
+                        )
+
                     send_message(chat_id, "✅ Your complaint has been sent to the developer.")
                     continue
 
-        except Exception as e:
+        except Exception:
             time.sleep(3)
 
-# ================= START =================
+# ===================== START APP =====================
 
 if __name__ == "__main__":
-    from threading import Thread
     Thread(target=run_bot).start()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
