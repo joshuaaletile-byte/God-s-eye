@@ -10,7 +10,8 @@ from openai import OpenAI
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))  # your numeric Telegram ID
+ADMIN_ID = os.getenv("ADMIN_ID")
+ADMIN_ID = int(ADMIN_ID) if ADMIN_ID and ADMIN_ID.isdigit() else None
 
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -206,10 +207,11 @@ def run_bot():
                         send_message(chat_id, "📝 Please write your complaint after /complaints")
                         continue
 
-                    send_message(
-                        ADMIN_ID,
-                        f"📩 **New Complaint**\nFrom chat `{chat_id}`:\n\n{complaint}"
-                    )
+                    if ADMIN_ID:
+    send_message(
+        ADMIN_ID,
+        f"📩 **New Complaint**\nFrom chat `{chat_id}`:\n\n{complaint}"
+    )
                     send_message(chat_id, "✅ Your complaint has been sent to the developer.")
                     continue
 
