@@ -5,6 +5,7 @@ import os
 from collections import Counter
 from flask import Flask
 from threading import Thread
+from datetime import datetime, timedelta
 from openai import OpenAI
 
 # ===================== CONFIG =====================
@@ -12,7 +13,6 @@ from openai import OpenAI
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# SAFE ADMIN ID HANDLING (FIXED)
 _admin_env = os.getenv("ADMIN_ID")
 ADMIN_ID = int(_admin_env) if _admin_env and _admin_env.isdigit() else None
 
@@ -20,6 +20,7 @@ BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 PAIR_FILE = "paired.json"
+STATS_FILE = "stats.json"
 
 # ===================== WEB SERVER =====================
 
@@ -31,20 +32,19 @@ def home():
 
 # ===================== UTILITIES =====================
 
-def load_pairs():
-    if not os.path.exists(PAIR_FILE):
+def load_json(path):
+    if not os.path.exists(path):
         return {}
-    with open(PAIR_FILE, "r") as f:
+    with open(path, "r") as f:
         return json.load(f)
 
-def save_pairs(data):
-    with open(PAIR_FILE, "w") as f:
+def save_json(path, data):
+    with open(path, "w") as f:
         json.dump(data, f, indent=2)
 
 def send_message(chat_id, text):
-    url = f"{BASE_URL}/sendMessage"
     requests.post(
-        url,
+        f"{BASE_URL}/sendMessage",
         json={
             "chat_id": chat_id,
             "text": text,
@@ -56,15 +56,25 @@ def send_message(chat_id, text):
 def clean(text):
     return "".join(c.lower() for c in text if c.isalnum() or c.isspace())
 
+# ===================== USER STATS =====================
+
+def record_activity(user_id):
+    stats = load_json(STATS_FILE)
+    now = datetime.utcnow().isoformat()
+
+    uid = str(user_id)
+    stats.setdefault(uid, []).append(now)
+    save_json(STATS_FILE, stats)
+
 # ===================== DATA SOURCES =====================
 
 def hackernews_data():
     try:
-        res = requests.get(
+        ids = requests.get(
             "https://hacker-news.firebaseio.com/v0/topstories.json",
             timeout=10
-        )
-        ids = res.json()[:5]
+        ).json()[:5]
+
         titles = []
         for i in ids:
             item = requests.get(
@@ -87,7 +97,7 @@ def devto_data():
     except:
         return []
 
-# ===================== AI FUNCTIONS =====================
+# ===================== AI LOGIC =====================
 
 def ai_style_trending(texts):
     if not texts:
@@ -106,7 +116,7 @@ def ai_style_trending(texts):
                 words.append(w)
 
     if not words:
-        return "Public discussions are currently too scattered to determine a clear trend."
+        return "Public discussions are currently too scattered to detect a trend."
 
     common = Counter(words).most_common(6)
     topics = ", ".join(w for w, _ in common)
@@ -114,7 +124,7 @@ def ai_style_trending(texts):
     return (
         "Based on continuous analysis of public discussions, "
         f"current trending topics revolve around {topics}. "
-        "These subjects are receiving sustained attention online."
+        "These topics are receiving sustained online attention."
     )
 
 def ai_answer(question, context):
@@ -122,14 +132,8 @@ def ai_answer(question, context):
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {
-                    "role": "system",
-                    "content": "You are an intelligent assistant that gives clear, human-like answers."
-                },
-                {
-                    "role": "user",
-                    "content": f"Context: {context}\n\nQuestion: {question}"
-                }
+                {"role": "system", "content": "You are a helpful, intelligent assistant."},
+                {"role": "user", "content": f"Context: {context}\n\nQuestion: {question}"}
             ],
             max_tokens=300
         )
@@ -142,9 +146,10 @@ def ai_answer(question, context):
 def robot_welcome(chat_id):
     for dots in ["•", "• •", "• • •"]:
         send_message(chat_id, f"Initializing{dots}")
-        time.sleep(0.7)
+        time.sleep(0.6)
 
-    welcome = (
+    send_message(
+        chat_id,
         "✅ Connection established.\n"
         "You are now **linked** to *God’s Eye Bot*.\n\n"
         "Created by **Ph03nix**, designed to monitor trends, "
@@ -158,8 +163,6 @@ def robot_welcome(chat_id):
         "/complaints – Send feedback to the developer\n\n"
         "⚡ Powered by **PH03NIX**"
     )
-
-    send_message(chat_id, welcome)
 
 # ===================== BOT LOOP =====================
 
@@ -183,66 +186,85 @@ def run_bot():
                 chat_id = message["chat"]["id"]
                 text = message.get("text", "").strip()
 
-                # START
+                record_activity(chat_id)
+
                 if text == "/start":
                     robot_welcome(chat_id)
                     continue
 
-                # PAIR
                 if text == "/pair":
-                    pairs = load_pairs()
+                    pairs = load_json(PAIR_FILE)
                     pairs[str(chat_id)] = True
-                    save_pairs(pairs)
-                    send_message(chat_id, "✅ This chat has been successfully paired.")
+                    save_json(PAIR_FILE, pairs)
+                    send_message(chat_id, "✅ Chat paired successfully.")
                     continue
 
-                # UNPAIR
                 if text == "/unpair":
-                    pairs = load_pairs()
+                    pairs = load_json(PAIR_FILE)
                     pairs.pop(str(chat_id), None)
-                    save_pairs(pairs)
-                    send_message(chat_id, "❌ This chat has been unpaired.")
+                    save_json(PAIR_FILE, pairs)
+                    send_message(chat_id, "❌ Chat unpaired.")
                     continue
 
-                # TRENDING
                 if text == "/trending":
                     data = hackernews_data() + devto_data()
-                    answer = ai_style_trending(data)
-                    send_message(chat_id, f"🔥 **Trending Now**\n\n{answer}")
+                    send_message(chat_id, f"🔥 **Trending Now**\n\n{ai_style_trending(data)}")
                     continue
 
-                # REQUESTS
                 if text.startswith("/requests"):
-                    question = text.replace("/requests", "").strip()
-                    if not question:
-                        send_message(chat_id, "❓ Please type your question after /requests")
+                    q = text.replace("/requests", "").strip()
+                    if not q:
+                        send_message(chat_id, "❓ Type your question after /requests")
                         continue
-
                     context = " ".join((hackernews_data() + devto_data())[:5])
-                    answer = ai_answer(question, context)
-                    send_message(chat_id, f"🤖 **Answer**\n\n{answer}")
+                    send_message(chat_id, f"🤖 **Answer**\n\n{ai_answer(q, context)}")
                     continue
 
-                # COMPLAINTS
                 if text.startswith("/complaints"):
-                    complaint = text.replace("/complaints", "").strip()
-                    if not complaint:
-                        send_message(chat_id, "📝 Please write your complaint after /complaints")
+                    msg = text.replace("/complaints", "").strip()
+                    if not msg:
+                        send_message(chat_id, "📝 Write your complaint after /complaints")
                         continue
 
                     if ADMIN_ID:
                         send_message(
                             ADMIN_ID,
-                            f"📩 **New Complaint**\nFrom chat `{chat_id}`:\n\n{complaint}"
+                            f"📩 **New Complaint**\nFrom `{chat_id}`:\n\n{msg}"
                         )
+                    send_message(chat_id, "✅ Complaint sent.")
+                    continue
 
-                    send_message(chat_id, "✅ Your complaint has been sent to the developer.")
+                if text == "/stats":
+                    if chat_id != ADMIN_ID:
+                        send_message(chat_id, "⛔ Admin only.")
+                        continue
+
+                    stats = load_json(STATS_FILE)
+                    now = datetime.utcnow()
+                    week = set()
+                    month = set()
+
+                    for uid, times in stats.items():
+                        for t in times:
+                            dt = datetime.fromisoformat(t)
+                            if now - dt <= timedelta(days=7):
+                                week.add(uid)
+                            if dt.month == now.month and dt.year == now.year:
+                                month.add(uid)
+
+                    send_message(
+                        chat_id,
+                        f"📊 **Bot Statistics**\n\n"
+                        f"👥 Active (7 days): **{len(week)}**\n"
+                        f"📅 Active (month): **{len(month)}**\n\n"
+                        "⚡ Powered by PH03NIX"
+                    )
                     continue
 
         except Exception:
             time.sleep(3)
 
-# ===================== START APP =====================
+# ===================== START =====================
 
 if __name__ == "__main__":
     Thread(target=run_bot).start()
