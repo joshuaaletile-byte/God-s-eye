@@ -9,5 +9,9 @@ def home():
     return "God’s Eye Bot is running — POWERED BY PH03NIX"
 
 if __name__ == "__main__":
-    threading.Thread(target=main.run_bot, daemon=True).start()
-    app.run(host="0.0.0.0", port=10000)
+    # Start Flask in a separate thread
+    flask_thread = threading.Thread(target=lambda: app.run(host="0.0.0.0", port=10000), daemon=True)
+    flask_thread.start()
+
+    # Run Telegram bot in main thread (blocking)
+    main.run_bot()
