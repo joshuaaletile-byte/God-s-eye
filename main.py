@@ -5,13 +5,13 @@ from intelligence import web_summary
 from stats import track, stats
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 ADMIN_ID_RAW = os.getenv("ADMIN_ID")
 if not ADMIN_ID_RAW:
     raise RuntimeError("ADMIN_ID env var is missing")
 ADMIN_ID = int(ADMIN_ID_RAW)
-
 WHATSAPP = os.getenv("WHATSAPP_NUMBER")
+
+# ----------------- Commands -----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     track(update.effective_user.id)
@@ -23,7 +23,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Commands:\n"
         "/trending – Latest useful trends\n"
         "/requests – Ask any question\n"
-        "/complaints – Send complaints\n\n"
+        "/complaints – Send complaints\n"
+        "/stats – Admin-only stats\n\n"
         "POWERED BY PH03NIX"
     )
 
@@ -32,7 +33,6 @@ async def requests_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Usage: /requests your question")
         return
-
     query = " ".join(context.args)
     try:
         answer = web_summary(query)
@@ -60,10 +60,8 @@ async def complaints(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_message(
         chat_id=ADMIN_ID,
-        text=(
-            f"📩 Complaint received:\n\n{complaint}\n\n"
-            f"To enable faster transfer of messages kindly tap the link below:\n{link}"
-        )
+        text=f"📩 Complaint received:\n\n{complaint}\n\n"
+             f"To enable faster transfer of messages kindly tap the link below:\n{link}"
     )
     await update.message.reply_text("✅ Complaint sent successfully.")
 
@@ -80,11 +78,9 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def run_bot():
     print("🤖 Starting Telegram bot polling...")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("requests", requests_cmd))
     app.add_handler(CommandHandler("trending", trending))
     app.add_handler(CommandHandler("complaints", complaints))
     app.add_handler(CommandHandler("stats", stats_cmd))
-
     app.run_polling()
