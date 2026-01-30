@@ -5,14 +5,19 @@ from intelligence import web_summary
 from stats import track, stats
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+
+ADMIN_ID_RAW = os.getenv("ADMIN_ID")
+if not ADMIN_ID_RAW:
+    raise RuntimeError("ADMIN_ID env var is missing")
+ADMIN_ID = int(ADMIN_ID_RAW)
+
 WHATSAPP = os.getenv("WHATSAPP_NUMBER")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     track(update.effective_user.id)
-    msg = (
-        "🤖 Initializing God’s Eye Bot...\n"
-        "⏳ Loading intelligence modules...\n\n"
+    await update.message.reply_text(
+        "🤖 Boot sequence initiated...\n"
+        "⏳ Activating intelligence core...\n\n"
         "✅ You are now connected to God’s Eye Bot\n"
         "Created by PH03NIX 🔥\n\n"
         "Commands:\n"
@@ -21,7 +26,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/complaints – Send complaints\n\n"
         "POWERED BY PH03NIX"
     )
-    await update.message.reply_text(msg)
 
 async def requests_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     track(update.effective_user.id)
@@ -30,33 +34,38 @@ async def requests_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     query = " ".join(context.args)
-    answer = web_summary(query)
-    await update.message.reply_text(answer)
+    try:
+        answer = web_summary(query)
+        await update.message.reply_text(answer)
+    except Exception as e:
+        print("REQUEST ERROR:", e)
+        await update.message.reply_text("⚠️ I couldn't process that request right now.")
 
 async def trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
     track(update.effective_user.id)
-    topics = ["football", "celebrity news", "technology"]
-    text = ""
+    topics = ["football news", "celebrity news", "technology trends"]
+    responses = []
     for t in topics:
-        text += f"\n🔹 {web_summary(t)}\n"
-    await update.message.reply_text(text)
+        responses.append(web_summary(t))
+    await update.message.reply_text("\n\n".join(responses))
 
 async def complaints(update: Update, context: ContextTypes.DEFAULT_TYPE):
     track(update.effective_user.id)
-    await update.message.reply_text(
-        "Please type your complaint after the command:\n"
-        "/complaints your message"
-    )
+    if not context.args:
+        await update.message.reply_text("Usage: /complaints your message")
+        return
 
-    if context.args:
-        complaint = " ".join(context.args)
-        link = f"https://wa.me/{WHATSAPP}?text={complaint}"
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=f"📩 Complaint received:\n{complaint}\n\n"
-                 f"To enable faster transfer of messages kindly tap the link below:\n{link}"
+    complaint = " ".join(context.args)
+    link = f"https://wa.me/{WHATSAPP}?text={complaint}"
+
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=(
+            f"📩 Complaint received:\n\n{complaint}\n\n"
+            f"To enable faster transfer of messages kindly tap the link below:\n{link}"
         )
-        await update.message.reply_text("✅ Complaint sent successfully.")
+    )
+    await update.message.reply_text("✅ Complaint sent successfully.")
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -69,10 +78,13 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 def run_bot():
+    print("🤖 Starting Telegram bot polling...")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("requests", requests_cmd))
     app.add_handler(CommandHandler("trending", trending))
     app.add_handler(CommandHandler("complaints", complaints))
     app.add_handler(CommandHandler("stats", stats_cmd))
+
     app.run_polling()
