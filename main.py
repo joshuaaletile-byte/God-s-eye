@@ -6,19 +6,19 @@ from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 import threading
 
-# ===== ENV =====
+# ===== ENV VARIABLES =====
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID"))
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-# ===== FLASK APP (FOR WEBSITE) =====
+# ===== FLASK (FOR WEBSITE API) =====
 app = Flask(__name__)
 
 USERS_FILE = "users.json"
 
 
-# ===== USER STORAGE =====
+# ================= USER STORAGE =================
 def load_users():
     try:
         with open(USERS_FILE, "r") as f:
@@ -38,7 +38,7 @@ def register_user(user_id):
     save_users(users)
 
 
-# ===== FREE AI ENGINE =====
+# ================= FREE AI ENGINE =================
 def get_ai_answer(query):
     try:
         url = "https://api.duckduckgo.com/"
@@ -48,12 +48,15 @@ def get_ai_answer(query):
         if res.get("Abstract"):
             return res["Abstract"]
 
+        if res.get("RelatedTopics"):
+            return res["RelatedTopics"][0].get("Text", "No clear answer found.")
+
         return "I couldn't find a clear answer. Try rephrasing."
     except:
         return "Knowledge service unavailable."
 
 
-# ===== WEBSITE API ROUTE =====
+# ================= WEBSITE API =================
 @app.route("/")
 def home():
     return "God Eye API Running"
@@ -66,39 +69,45 @@ def ask_api():
     return jsonify({"answer": answer})
 
 
-# ===== TELEGRAM COMMANDS =====
+# ================= TELEGRAM COMMANDS =================
+
+# START
 @bot.message_handler(commands=['start'])
 def start(message):
     register_user(message.from_user.id)
 
     bot.send_message(
         message.chat.id,
-        "🤖 <b>God Eye Bot</b>\nSystem initialized.\n\n"
-        "Commands:\n"
+        "🤖 <b>God Eye Bot Activated</b>\n\n"
+        "System ready.\n\n"
+        "<b>Commands:</b>\n"
         "/ask question\n"
         "/trending\n"
+        "/website\n"
         "/complaint\n"
         "/stats (admin)\n\n"
         "Powered by PH03NIX"
     )
 
 
+# ASK AI
 @bot.message_handler(commands=['ask'])
 def ask(message):
     register_user(message.from_user.id)
 
     query = message.text.replace("/ask", "").strip()
+
     if not query:
-        bot.reply_to(message, "Example:\n/ask What is AI?")
+        bot.reply_to(message, "Example:\n/ask Who is Davido?")
         return
 
-    msg = bot.reply_to(message, "Thinking...")
+    msg = bot.reply_to(message, "🔎 Thinking...")
     answer = get_ai_answer(query)
 
     bot.edit_message_text(answer, message.chat.id, msg.message_id)
 
 
-# ===== TRENDING NEWS =====
+# TRENDING NEWS (FREE RSS)
 @bot.message_handler(commands=['trending'])
 def trending(message):
     register_user(message.from_user.id)
@@ -109,7 +118,7 @@ def trending(message):
 
         items = res.split("<item>")[1:6]
 
-        text = "🔥 <b>Trending News</b>\n\n"
+        text = "🔥 <b>Trending Now</b>\n\n"
         for item in items:
             title = item.split("<title>")[1].split("</title>")[0]
             text += f"• {title}\n"
@@ -120,20 +129,44 @@ def trending(message):
         bot.send_message(message.chat.id, "Couldn't fetch trending news.")
 
 
-# ===== COMPLAINT =====
+# WEBSITE BUTTON
+@bot.message_handler(commands=['website'])
+def website(message):
+    register_user(message.from_user.id)
+
+    markup = telebot.types.InlineKeyboardMarkup()
+    btn = telebot.types.InlineKeyboardButton(
+        text="🌐 Open PH03NIX Website",
+        url="https://joshuaaletile-byte.github.io/Ph03nix-link-bot/"
+    )
+    markup.add(btn)
+
+    bot.send_message(
+        message.chat.id,
+        "Click below to open the web portal:",
+        reply_markup=markup
+    )
+
+
+# COMPLAINT SYSTEM
 @bot.message_handler(commands=['complaint'])
 def complaint(message):
-    msg = bot.send_message(message.chat.id, "Type your complaint:")
+    msg = bot.send_message(message.chat.id, "✍️ Type your complaint:")
     bot.register_next_step_handler(msg, process_complaint)
 
 
 def process_complaint(message):
-    text = f"📩 Complaint from {message.from_user.id}\n\n{message.text}"
+    text = (
+        f"📩 <b>New Complaint</b>\n\n"
+        f"User ID: {message.from_user.id}\n"
+        f"Message:\n{message.text}"
+    )
+
     bot.send_message(ADMIN_ID, text)
-    bot.reply_to(message, "Complaint sent successfully.")
+    bot.reply_to(message, "✅ Complaint sent successfully.")
 
 
-# ===== USER STATS =====
+# USER STATS (ADMIN ONLY)
 @bot.message_handler(commands=['stats'])
 def stats(message):
     if message.from_user.id != ADMIN_ID:
@@ -155,11 +188,21 @@ def stats(message):
 
     bot.send_message(
         message.chat.id,
-        f"📊 Stats\n\nWeekly Users: {weekly}\nMonthly Users: {monthly}\nTotal Users: {len(users)}"
+        f"📊 <b>Bot Statistics</b>\n\n"
+        f"Weekly Users: {weekly}\n"
+        f"Monthly Users: {monthly}\n"
+        f"Total Users: {len(users)}"
     )
 
 
-# ===== RUN BOT + API TOGETHER =====
+# NORMAL CHAT (fallback AI)
+@bot.message_handler(func=lambda m: True)
+def chat(message):
+    register_user(message.from_user.id)
+    bot.reply_to(message, get_ai_answer(message.text))
+
+
+# ================= RUN BOT + API TOGETHER =================
 def run_bot():
     bot.infinity_polling(skip_pending=True)
 
